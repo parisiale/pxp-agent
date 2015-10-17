@@ -491,7 +491,11 @@ void Configuration::setupLogging() {
     std::ostream *stream = nullptr;
 
     if (!console_logger) {
-        // We should log on file
+#ifdef _WIN32
+        // Windows: configure event logger
+        lth_log::setup_event_logger();
+#else
+        // POSIX: log on file
         auto logdir = HW::GetFlag<std::string>("logdir");
 
         if (logdir.empty()) {
@@ -504,13 +508,15 @@ void Configuration::setupLogging() {
         // NOTE(ale): we must validate the logifle path since we set
         // up logging before calling validateAndNormalizeConfiguration
         validateLogDirPath(logdir_path);
-
         logfile_ = (logdir_path / LOGFILE_NAME).string();
         logfile_fstream_.open(logfile_.c_str(), std::ios_base::app);
         stream = &logfile_fstream_;
+        lth_log::setup_logging(*stream);
+#endif
     } else {
-        // Log on stdout by default
+        // Console logger
         stream = &boost::nowide::cout;
+        lth_log::setup_logging(*stream);
     }
 
     lth_log::log_level lvl = lth_log::log_level::none;
@@ -531,8 +537,6 @@ void Configuration::setupLogging() {
         throw Configuration::Error { "invalid log level: '" + loglevel + "'" };
     }
 
-    // Configure logging for pxp-agent
-    lth_log::setup_logging(*stream);
     lth_log::set_level(lvl);
 
 #ifdef DEV_LOG_COLOR
@@ -546,7 +550,10 @@ void Configuration::setupLogging() {
 #endif  // DEV_LOG_COLOR
 
     // Configure logging for cpp-pcp-client
-    PCPClient::Util::setupLogging(*stream, force_colorization, loglevel);
+    PCPClient::Util::setupLogging((!console_logger && stream == nullptr),
+                                  *stream,
+                                  force_colorization,
+                                  loglevel);
 
     if (!console_logger) {
         // Configure platform-specific things for file logging
