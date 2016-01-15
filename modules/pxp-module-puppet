@@ -109,10 +109,10 @@ def get_result_from_report(exitcode, config, start_time)
   return run_result
 end
 
-def start_run(config, params)
+def start_run(config, action_input)
   exitcode = DEFAULT_EXITCODE
-  cmd = make_command_array(config, params)
-  env = make_environment_hash(params)
+  cmd = make_command_array(config, action_input)
+  env = make_environment_hash(action_input)
   start_time = Time.now
 
   run_result = Puppet::Util::Execution.execute(cmd, {:failonfail => false,
@@ -154,7 +154,7 @@ def metadata()
           },
           :required => [:env, :flags]
         },
-        :output => {
+        :results => {
           :type => "object",
           :properties => {
             :kind => {
@@ -201,15 +201,18 @@ def metadata()
   }
 end
 
-def run(params_and_config)
-  if !params_and_config
-    return make_error_result(DEFAULT_EXITCODE, Errors::InvalidJson,
-                             "Invalid json parsed on STDIN. Cannot start run action")
+def run(config, action_input)
+  if !File.exist?(config["puppet_bin"])
+    return make_error_result(DEFAULT_EXITCODE, Errors::NoPuppetBin,
+                             "Puppet executable '#{config["puppet_bin"]}' does not exist")
   end
 
-  params = params_and_config["params"]
-  config = params_and_config["config"]
-  params["flags"] = params["flags"] | ["--onetime", "--no-daemonize", "--verbose"]
+  return start_run(config, action_input)
+end
+
+
+def get_configuration(args)
+  config = args["configuration"] || {}
 
   if config["puppet_bin"].nil? || config["puppet_bin"].empty?
     if !is_win?
@@ -221,13 +224,16 @@ def run(params_and_config)
     end
   end
 
-  if !File.exist?(config["puppet_bin"])
-    return make_error_result(DEFAULT_EXITCODE, Errors::NoPuppetBin,
-                             "Puppet executable '#{config["puppet_bin"]}' does not exist")
-  end
-
-  return start_run(config, params)
+  config
 end
+
+
+def get_action_input(args)
+  action_input = args["input"]
+  action_input["flags"] = action_input["flags"] | ["--onetime", "--no-daemonize", "--verbose"]
+  action_input
+end
+
 
 if __FILE__ == $0
   action = ARGV.shift || 'metadata'
@@ -235,12 +241,25 @@ if __FILE__ == $0
   if action == 'metadata'
     puts metadata.to_json
   else
-    params_and_config = JSON.parse($stdin.read.chomp) rescue nil
+    args = JSON.parse($stdin.read.chomp) rescue nil
 
-    run_result = run(params_and_config)
-    puts run_result.to_json
+    if !args
+      return make_error_result(DEFAULT_EXITCODE, Errors::InvalidJson,
+                               "Invalid json parsed on STDIN. Cannot start run action")
+    end
 
-    if !run_result["error"].nil?
+    config = get_configuration(args)
+    action_input = get_action_input(args)
+
+    # TODO(ale): retrieve action_output instead of action_results,
+    # that should contain "results", "error", and "exitcode" entries
+
+    # TODO(ale): write output to file if args conatin "output_files"
+
+    action_results = run(config, action_input)
+    puts action_results.to_json
+
+    if !action_results["error"].nil?
       exit 1
     end
   end

@@ -32,6 +32,8 @@ class ActionRequest {
     ActionRequest(RequestType type_,
                   PCPClient::ParsedChunks&& parsed_chunks_);
 
+    void setResultsDir(const std::string& results_dir);
+
     const RequestType& type() const;
     const std::string& id() const;
     const std::string& sender() const;
@@ -40,6 +42,7 @@ class ActionRequest {
     const std::string& action() const;
     const bool& notifyOutcome() const;
     const PCPClient::ParsedChunks& parsedChunks() const;
+    const std::string& resultsDir() const;
 
     // The following accessors perform lazy initialization
     // The params entry is not required; in case it's not included
@@ -60,6 +63,9 @@ class ActionRequest {
     // Lazy initialized
     mutable lth_jc::JsonContainer params_;
     mutable std::string params_txt_;
+
+    // This one has its own setter
+    std::string results_dir_;
 
     void init();
     void validateFormat();
