@@ -93,10 +93,10 @@ def rpc_blocking_request(broker, targets,
     end
   end
 
-  if !client.connect(5)
+  if !client.connect(10)
     raise "Controller PCP client failed to connect with pcp-broker on #{broker}"
   end
-  
+
   if !client.associated?
     raise "Controller PCP client failed to associate with pcp-broker on #{broker}"
   end
@@ -132,7 +132,7 @@ def rpc_blocking_request(broker, targets,
     end
   rescue Timeout::Error
     mutex.synchronize do
-      if !have_all_rpc_responses?
+      if !have_all_rpc_responses?(targets, responses)
         raise "Didn't receive all PCP responses when requesting puppet run on #{targets}. Responses received were: #{responses.to_s}"
       end
     end
@@ -152,4 +152,85 @@ def have_all_rpc_responses?(targets, responses)
     end
   end
   return true
+end
+
+def rpc_non_blocking_request(broker, targets,
+                         pxp_module = 'pxp-module-puppet', action = 'run',
+                         params)
+  # Event machine is required by the ruby-pcp-client gem
+  # https://github.com/puppetlabs/ruby-pcp-client
+  em = Thread.new { EM.run }
+
+  mutex = Mutex.new
+  have_response = ConditionVariable.new
+  responses = Hash.new
+
+  client = PCP::Client.new({
+    :server => broker_ws_uri(broker),
+    :ssl_cert => "../test-resources/ssl/certs/controller01.example.com.pem",
+    :ssl_key => "../test-resources/ssl/private_keys/controller01.example.com.pem"
+  })
+
+  client.on_message = proc do |message|
+    mutex.synchronize do
+      resp = {
+        :envelope => message.envelope,
+        :data     => JSON.load(message.data),
+        :debug    => JSON.load(message.debug)
+      }
+      responses[resp[:envelope][:sender]] = resp
+      print resp
+      have_response.signal
+    end
+  end
+
+  if !client.connect(10)
+    raise "Controller PCP client failed to connect with pcp-broker on #{broker}"
+  end
+
+  if !client.associated?
+    raise "Controller PCP client failed to associate with pcp-broker on #{broker}"
+  end
+
+  message = PCP::Message.new({
+    :message_type => 'http://puppetlabs.com/rpc_non_blocking_request',
+    :targets => targets
+  })
+
+  message.data = {
+    :transaction_id => SecureRandom.uuid,
+    :notify_outcome => false,
+    :module         => pxp_module,
+    :action         => action,
+    :params         => params
+  }.to_json
+
+  message_expiry = 10 # Seconds for the PCP message to be considered failed
+  rpc_action_expiry = 60 # Seconds for the entire RPC action to be considered failed
+  message.expires(message_expiry)
+
+  client.send(message)
+
+  begin
+    Timeout::timeout(rpc_action_expiry) do
+      done = false
+      loop do
+        mutex.synchronize do
+          have_response.wait(mutex)
+          done = have_all_rpc_responses?(targets, responses)
+        end
+        break if done
+      end
+    end
+  rescue Timeout::Error
+    mutex.synchronize do
+      if !have_all_rpc_responses?(targets, responses)
+        raise "Didn't receive all PCP responses when requesting puppet run on #{targets}. Responses received were: #{responses.to_s}"
+      end
+    end
+  end # wait for message
+
+  em.exit
+
+  responses
 end
